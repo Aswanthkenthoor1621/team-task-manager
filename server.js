@@ -12,7 +12,6 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// Auth Middleware
 function auth(req, res, next) {
   const token = req.headers['authorization']?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'No token' });
@@ -24,117 +23,121 @@ function auth(req, res, next) {
   }
 }
 
-// ── AUTH ROUTES ──────────────────────────────────────────
 app.post('/api/signup', (req, res) => {
   const { name, email, password, role } = req.body;
   if (!name || !email || !password)
     return res.status(400).json({ error: 'All fields required' });
   const hashed = bcrypt.hashSync(password, 10);
-  try {
-    const stmt = db.prepare('INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)');
-    const result = stmt.run(name, email, hashed, role || 'member');
-    const token = jwt.sign({ id: result.lastInsertRowid, name, email, role: role || 'member' }, SECRET);
-    res.json({ token, user: { id: result.lastInsertRowid, name, email, role: role || 'member' } });
-  } catch (e) {
-    res.status(400).json({ error: 'Email already exists' });
-  }
+  db.run('INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)',
+    [name, email, hashed, role || 'member'],
+    function(err) {
+      if (err) return res.status(400).json({ error: 'Email already exists' });
+      const token = jwt.sign({ id: this.lastID, name, email, role: role || 'member' }, SECRET);
+      res.json({ token, user: { id: this.lastID, name, email, role: role || 'member' } });
+    });
 });
 
 app.post('/api/login', (req, res) => {
   const { email, password } = req.body;
-  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
-  if (!user || !bcrypt.compareSync(password, user.password))
-    return res.status(400).json({ error: 'Invalid credentials' });
-  const token = jwt.sign({ id: user.id, name: user.name, email: user.email, role: user.role }, SECRET);
-  res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
+  db.get('SELECT * FROM users WHERE email = ?', [email], (err, user) => {
+    if (!user || !bcrypt.compareSync(password, user.password))
+      return res.status(400).json({ error: 'Invalid credentials' });
+    const token = jwt.sign({ id: user.id, name: user.name, email: user.email, role: user.role }, SECRET);
+    res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
+  });
 });
 
-// ── PROJECT ROUTES ───────────────────────────────────────
 app.get('/api/projects', auth, (req, res) => {
-  const projects = db.prepare(`
-    SELECT p.*, u.name as creator_name FROM projects p
+  db.all(`SELECT p.*, u.name as creator_name FROM projects p
     JOIN users u ON p.created_by = u.id
     WHERE p.created_by = ? OR p.id IN (
       SELECT project_id FROM project_members WHERE user_id = ?
-    )
-  `).all(req.user.id, req.user.id);
-  res.json(projects);
+    )`, [req.user.id, req.user.id], (err, rows) => {
+    res.json(rows || []);
+  });
 });
 
 app.post('/api/projects', auth, (req, res) => {
   const { name, description } = req.body;
   if (!name) return res.status(400).json({ error: 'Project name required' });
-  const result = db.prepare('INSERT INTO projects (name, description, created_by) VALUES (?, ?, ?)')
-    .run(name, description, req.user.id);
-  db.prepare('INSERT INTO project_members (project_id, user_id, role) VALUES (?, ?, ?)')
-    .run(result.lastInsertRowid, req.user.id, 'admin');
-  res.json({ id: result.lastInsertRowid, name, description });
+  db.run('INSERT INTO projects (name, description, created_by) VALUES (?, ?, ?)',
+    [name, description, req.user.id],
+    function(err) {
+      if (err) return res.status(500).json({ error: err.message });
+      db.run('INSERT INTO project_members (project_id, user_id, role) VALUES (?, ?, ?)',
+        [this.lastID, req.user.id, 'admin']);
+      res.json({ id: this.lastID, name, description });
+    });
 });
 
 app.delete('/api/projects/:id', auth, (req, res) => {
-  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
-  if (!project) return res.status(404).json({ error: 'Not found' });
-  if (project.created_by !== req.user.id)
-    return res.status(403).json({ error: 'Only creator can delete' });
-  db.prepare('DELETE FROM tasks WHERE project_id = ?').run(req.params.id);
-  db.prepare('DELETE FROM project_members WHERE project_id = ?').run(req.params.id);
-  db.prepare('DELETE FROM projects WHERE id = ?').run(req.params.id);
-  res.json({ success: true });
+  db.get('SELECT * FROM projects WHERE id = ?', [req.params.id], (err, project) => {
+    if (!project) return res.status(404).json({ error: 'Not found' });
+    if (project.created_by !== req.user.id)
+      return res.status(403).json({ error: 'Only creator can delete' });
+    db.run('DELETE FROM tasks WHERE project_id = ?', [req.params.id]);
+    db.run('DELETE FROM project_members WHERE project_id = ?', [req.params.id]);
+    db.run('DELETE FROM projects WHERE id = ?', [req.params.id]);
+    res.json({ success: true });
+  });
 });
 
-// ── TASK ROUTES ──────────────────────────────────────────
 app.get('/api/projects/:id/tasks', auth, (req, res) => {
-  const tasks = db.prepare(`
-    SELECT t.*, u.name as assigned_name FROM tasks t
+  db.all(`SELECT t.*, u.name as assigned_name FROM tasks t
     LEFT JOIN users u ON t.assigned_to = u.id
-    WHERE t.project_id = ?
-  `).all(req.params.id);
-  res.json(tasks);
+    WHERE t.project_id = ?`, [req.params.id], (err, rows) => {
+    res.json(rows || []);
+  });
 });
 
 app.post('/api/projects/:id/tasks', auth, (req, res) => {
   const { title, description, priority, due_date, assigned_to } = req.body;
   if (!title) return res.status(400).json({ error: 'Title required' });
-  const result = db.prepare(`
-    INSERT INTO tasks (title, description, priority, due_date, assigned_to, project_id, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(title, description, priority || 'medium', due_date, assigned_to || null, req.params.id, req.user.id);
-  res.json({ id: result.lastInsertRowid, title });
+  db.run(`INSERT INTO tasks (title, description, priority, due_date, assigned_to, project_id, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [title, description, priority || 'medium', due_date, assigned_to || null, req.params.id, req.user.id],
+    function(err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ id: this.lastID, title });
+    });
 });
 
 app.patch('/api/tasks/:id', auth, (req, res) => {
   const { status, title, description, priority, due_date } = req.body;
-  const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
-  if (!task) return res.status(404).json({ error: 'Not found' });
-  db.prepare(`
-    UPDATE tasks SET
-      status = COALESCE(?, status),
-      title = COALESCE(?, title),
-      description = COALESCE(?, description),
-      priority = COALESCE(?, priority),
-      due_date = COALESCE(?, due_date)
-    WHERE id = ?
-  `).run(status, title, description, priority, due_date, req.params.id);
-  res.json({ success: true });
+  db.run(`UPDATE tasks SET
+    status = COALESCE(?, status),
+    title = COALESCE(?, title),
+    description = COALESCE(?, description),
+    priority = COALESCE(?, priority),
+    due_date = COALESCE(?, due_date)
+    WHERE id = ?`,
+    [status, title, description, priority, due_date, req.params.id],
+    (err) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ success: true });
+    });
 });
 
 app.delete('/api/tasks/:id', auth, (req, res) => {
-  db.prepare('DELETE FROM tasks WHERE id = ?').run(req.params.id);
-  res.json({ success: true });
+  db.run('DELETE FROM tasks WHERE id = ?', [req.params.id], (err) => {
+    res.json({ success: true });
+  });
 });
 
-// ── USERS ROUTE ──────────────────────────────────────────
 app.get('/api/users', auth, (req, res) => {
-  const users = db.prepare('SELECT id, name, email, role FROM users').all();
-  res.json(users);
+  db.all('SELECT id, name, email, role FROM users', [], (err, rows) => {
+    res.json(rows || []);
+  });
 });
 
-// ── DASHBOARD STATS ──────────────────────────────────────
 app.get('/api/stats', auth, (req, res) => {
-  const total = db.prepare('SELECT COUNT(*) as count FROM tasks WHERE assigned_to = ?').get(req.user.id);
-  const done = db.prepare("SELECT COUNT(*) as count FROM tasks WHERE assigned_to = ? AND status = 'done'").get(req.user.id);
-  const overdue = db.prepare("SELECT COUNT(*) as count FROM tasks WHERE assigned_to = ? AND due_date < date('now') AND status != 'done'").get(req.user.id);
-  res.json({ total: total.count, done: done.count, overdue: overdue.count });
+  db.get('SELECT COUNT(*) as count FROM tasks WHERE assigned_to = ?', [req.user.id], (err, total) => {
+    db.get("SELECT COUNT(*) as count FROM tasks WHERE assigned_to = ? AND status = 'done'", [req.user.id], (err, done) => {
+      db.get("SELECT COUNT(*) as count FROM tasks WHERE assigned_to = ? AND due_date < date('now') AND status != 'done'", [req.user.id], (err, overdue) => {
+        res.json({ total: total.count, done: done.count, overdue: overdue.count });
+      });
+    });
+  });
 });
 
 app.get('/{*path}', (req, res) => {
