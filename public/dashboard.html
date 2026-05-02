@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Dashboard - TaskManager</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- NAVBAR -->
+  <div class="navbar">
+    <h2>📋 TaskManager</h2>
+    <div class="user-info">
+      <span id="user-name"></span>
+      <span id="user-badge" class="badge"></span>
+      <button class="btn btn-danger btn-sm" onclick="logout()">Logout</button>
+    </div>
+  </div>
+
+  <div class="container">
+
+    <!-- STATS -->
+    <div class="stats">
+      <div class="stat-card">
+        <h3 id="stat-total">0</h3>
+        <p>Total Tasks</p>
+      </div>
+      <div class="stat-card done">
+        <h3 id="stat-done">0</h3>
+        <p>Completed</p>
+      </div>
+      <div class="stat-card overdue">
+        <h3 id="stat-overdue">0</h3>
+        <p>Overdue</p>
+      </div>
+    </div>
+
+    <!-- PROJECTS -->
+    <div class="section">
+      <div class="section-header">
+        <h3>📁 Projects</h3>
+        <button class="btn btn-primary btn-sm" onclick="openModal('project-modal')">+ New Project</button>
+      </div>
+      <div class="projects-grid" id="projects-grid">
+        <p style="color:#888">No projects yet. Create one!</p>
+      </div>
+    </div>
+
+    <!-- TASKS -->
+    <div class="section" id="tasks-section" style="display:none">
+      <div class="section-header">
+        <h3 id="tasks-title">Tasks</h3>
+        <button class="btn btn-primary btn-sm" onclick="openModal('task-modal')">+ New Task</button>
+      </div>
+      <div class="task-columns">
+        <div class="task-col">
+          <h4>📝 To Do</h4>
+          <div id="col-todo"></div>
+        </div>
+        <div class="task-col">
+          <h4>⚙️ In Progress</h4>
+          <div id="col-inprogress"></div>
+        </div>
+        <div class="task-col">
+          <h4>✅ Done</h4>
+          <div id="col-done"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PROJECT MODAL -->
+  <div class="modal-overlay" id="project-modal">
+    <div class="modal">
+      <h3>Create New Project</h3>
+      <div class="form-group">
+        <label>Project Name</label>
+        <input type="text" id="proj-name" placeholder="e.g. Website Redesign" />
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <input type="text" id="proj-desc" placeholder="Brief description..." />
+      </div>
+      <div class="error" id="proj-error"></div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeModal('project-modal')">Cancel</button>
+        <button class="btn btn-primary" onclick="createProject()">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TASK MODAL -->
+  <div class="modal-overlay" id="task-modal">
+    <div class="modal">
+      <h3>Create New Task</h3>
+      <div class="form-group">
+        <label>Task Title</label>
+        <input type="text" id="task-title" placeholder="e.g. Design homepage" />
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <input type="text" id="task-desc" placeholder="Details..." />
+      </div>
+      <div class="form-group">
+        <label>Priority</label>
+        <select id="task-priority">
+          <option value="low">Low</option>
+          <option value="medium" selected>Medium</option>
+          <option value="high">High</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Due Date</label>
+        <input type="date" id="task-due" />
+      </div>
+      <div class="form-group">
+        <label>Assign To</label>
+        <select id="task-assign"></select>
+      </div>
+      <div class="error" id="task-error"></div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeModal('task-modal')">Cancel</button>
+        <button class="btn btn-primary" onclick="createTask()">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const token = localStorage.getItem('token');
+    const user  = JSON.parse(localStorage.getItem('user') || '{}');
+    let currentProject = null;
+
+    if (!token) window.location.href = '/index.html';
+
+    // Setup navbar
+    document.getElementById('user-name').textContent = user.name || '';
+    const badge = document.getElementById('user-badge');
+    badge.textContent = user.role || 'member';
+    badge.className = `badge badge-${user.role || 'member'}`;
+
+    function api(url, method = 'GET', body = null) {
+      return fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: body ? JSON.stringify(body) : null
+      }).then(r => r.json());
+    }
+
+    function openModal(id)  { document.getElementById(id).classList.add('open'); }
+    function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+    function logout() { localStorage.clear(); window.location.href = '/index.html'; }
+
+    async function loadStats() {
+      const s = await api('/api/stats');
+      document.getElementById('stat-total').textContent   = s.total   || 0;
+      document.getElementById('stat-done').textContent    = s.done    || 0;
+      document.getElementById('stat-overdue').textContent = s.overdue || 0;
+    }
+
+    async function loadProjects() {
+      const projects = await api('/api/projects');
+      const grid = document.getElementById('projects-grid');
+      if (!projects.length) {
+        grid.innerHTML = '<p style="color:#888">No projects yet. Create one!</p>';
+        return;
+      }
+      grid.innerHTML = projects.map(p => `
+        <div class="project-card ${currentProject?.id === p.id ? 'active' : ''}" onclick="selectProject(${p.id}, '${p.name}')">
+          <h4>${p.name}</h4>
+          <p>${p.description || 'No description'}</p>
+          <div class="project-actions">
+            ${p.created_by === user.id ? `<button class="btn btn-danger btn-sm" onclick="deleteProject(event,${p.id})">Delete</button>` : ''}
+          </div>
+        </div>
+      `).join('');
+    }
+
+    async function createProject() {
+      const name = document.getElementById('proj-name').value;
+      const desc = document.getElementById('proj-desc').value;
+      const err  = document.getElementById('proj-error');
+      if (!name) return (err.textContent = 'Name is required');
+      const res = await api('/api/projects', 'POST', { name, description: desc });
+      if (res.error) return (err.textContent = res.error);
+      document.getElementById('proj-name').value = '';
+      document.getElementById('proj-desc').value = '';
+      err.textContent = '';
+      closeModal('project-modal');
+      loadProjects();
+    }
+
+    async function deleteProject(e, id) {
+      e.stopPropagation();
+      if (!confirm('Delete this project and all its tasks?')) return;
+      await api(`/api/projects/${id}`, 'DELETE');
+      if (currentProject?.id === id) {
+        currentProject = null;
+        document.getElementById('tasks-section').style.display = 'none';
+      }
+      loadProjects();
+      loadStats();
+    }
+
+    async function selectProject(id, name) {
+      currentProject = { id, name };
+      document.getElementById('tasks-title').textContent = `📁 ${name} — Tasks`;
+      document.getElementById('tasks-section').style.display = 'block';
+      loadTasks();
+      loadUsers();
+      loadProjects();
+    }
+
+    async function loadTasks() {
+      const tasks = await api(`/api/projects/${currentProject.id}/tasks`);
+      const todo       = document.getElementById('col-todo');
+      const inprogress = document.getElementById('col-inprogress');
+      const done       = document.getElementById('col-done');
+      todo.innerHTML = inprogress.innerHTML = done.innerHTML = '';
+
+      const today = new Date().toISOString().split('T')[0];
+
+      tasks.forEach(t => {
+        const isOverdue = t.due_date && t.due_date < today && t.status !== 'done';
+        const card = `
+          <div class="task-card">
+            <h5>${t.title}</h5>
+            <p>${t.description || ''}</p>
+            <div class="task-meta">
+              <span class="tag tag-${t.priority}">${t.priority}</span>
+              ${isOverdue ? '<span class="tag tag-overdue">Overdue</span>' : ''}
+              ${t.due_date ? `<span class="tag" style="background:#eee">${t.due_date}</span>` : ''}
+              ${t.assigned_name ? `<span class="tag" style="background:#e8f4fd;color:#2980b9">👤 ${t.assigned_name}</span>` : ''}
+            </div>
+            <div class="task-actions">
+              ${t.status !== 'inprogress' ? `<button class="btn btn-sm" style="background:#ffeaa7" onclick="moveTask(${t.id},'inprogress')">▶ In Progress</button>` : ''}
+              ${t.status !== 'done'       ? `<button class="btn btn-sm btn-success" onclick="moveTask(${t.id},'done')">✓ Done</button>` : ''}
+              ${t.status !== 'todo'       ? `<button class="btn btn-sm btn-secondary" onclick="moveTask(${t.id},'todo')">↩ Todo</button>` : ''}
+              <button class="btn btn-sm btn-danger" onclick="deleteTask(${t.id})">🗑</button>
+            </div>
+          </div>`;
+        if      (t.status === 'todo')       todo.innerHTML       += card;
+        else if (t.status === 'inprogress') inprogress.innerHTML += card;
+        else                                done.innerHTML       += card;
+      });
+    }
+
+    async function loadUsers() {
+      const users  = await api('/api/users');
+      const select = document.getElementById('task-assign');
+      select.innerHTML = '<option value="">Unassigned</option>' +
+        users.map(u => `<option value="${u.id}">${u.name} (${u.role})</option>`).join('');
+    }
+
+    async function createTask() {
+      const title    = document.getElementById('task-title').value;
+      const desc     = document.getElementById('task-desc').value;
+      const priority = document.getElementById('task-priority').value;
+      const due_date = document.getElementById('task-due').value;
+      const assigned = document.getElementById('task-assign').value;
+      const err      = document.getElementById('task-error');
+      if (!title) return (err.textContent = 'Title is required');
+      const res = await api(`/api/projects/${currentProject.id}/tasks`, 'POST', {
+        title, description: desc, priority, due_date, assigned_to: assigned || null
+      });
+      if (res.error) return (err.textContent = res.error);
+      document.getElementById('task-title').value = '';
+      document.getElementById('task-desc').value  = '';
+      document.getElementById('task-due').value   = '';
+      err.textContent = '';
+      closeModal('task-modal');
+      loadTasks();
+      loadStats();
+    }
+
+    async function moveTask(id, status) {
+      await api(`/api/tasks/${id}`, 'PATCH', { status });
+      loadTasks();
+      loadStats();
+    }
+
+    async function deleteTask(id) {
+      if (!confirm('Delete this task?')) return;
+      await api(`/api/tasks/${id}`, 'DELETE');
+      loadTasks();
+      loadStats();
+    }
+
+    // Init
+    loadStats();
+    loadProjects();
+  </script>
+</body>
+</html>

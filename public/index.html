@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Team Task Manager</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="auth-wrapper">
+    <div class="auth-box">
+      <h1>📋 TaskManager</h1>
+      <p>Manage your team's work efficiently</p>
+
+      <div class="tabs">
+        <button class="active" onclick="showTab('login')">Login</button>
+        <button onclick="showTab('signup')">Sign Up</button>
+      </div>
+
+      <!-- LOGIN -->
+      <div id="login-form">
+        <div class="form-group">
+          <label>Email</label>
+          <input type="email" id="login-email" placeholder="you@example.com" />
+        </div>
+        <div class="form-group">
+          <label>Password</label>
+          <input type="password" id="login-password" placeholder="••••••••" />
+        </div>
+        <button class="btn btn-primary" onclick="login()">Login</button>
+        <div class="error" id="login-error"></div>
+      </div>
+
+      <!-- SIGNUP -->
+      <div id="signup-form" style="display:none">
+        <div class="form-group">
+          <label>Full Name</label>
+          <input type="text" id="signup-name" placeholder="John Doe" />
+        </div>
+        <div class="form-group">
+          <label>Email</label>
+          <input type="email" id="signup-email" placeholder="you@example.com" />
+        </div>
+        <div class="form-group">
+          <label>Password</label>
+          <input type="password" id="signup-password" placeholder="••••••••" />
+        </div>
+        <div class="form-group">
+          <label>Role</label>
+          <select id="signup-role">
+            <option value="member">Member</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" onclick="signup()">Create Account</button>
+        <div class="error" id="signup-error"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function showTab(tab) {
+      document.getElementById('login-form').style.display  = tab === 'login'  ? 'block' : 'none';
+      document.getElementById('signup-form').style.display = tab === 'signup' ? 'block' : 'none';
+      document.querySelectorAll('.tabs button').forEach((b, i) => {
+        b.classList.toggle('active', (tab === 'login' && i === 0) || (tab === 'signup' && i === 1));
+      });
+    }
+
+    async function login() {
+      const email    = document.getElementById('login-email').value;
+      const password = document.getElementById('login-password').value;
+      const err      = document.getElementById('login-error');
+      err.textContent = '';
+      try {
+        const res  = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password })
+        });
+        const data = await res.json();
+        if (!res.ok) return (err.textContent = data.error);
+        localStorage.setItem('token', data.token);
+        localStorage.setItem('user',  JSON.stringify(data.user));
+        window.location.href = '/dashboard.html';
+      } catch {
+        err.textContent = 'Server error. Try again.';
+      }
+    }
+
+    async function signup() {
+      const name     = document.getElementById('signup-name').value;
+      const email    = document.getElementById('signup-email').value;
+      const password = document.getElementById('signup-password').value;
+      const role     = document.getElementById('signup-role').value;
+      const err      = document.getElementById('signup-error');
+      err.textContent = '';
+      try {
+        const res  = await fetch('/api/signup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, email, password, role })
+        });
+        const data = await res.json();
+        if (!res.ok) return (err.textContent = data.error);
+        localStorage.setItem('token', data.token);
+        localStorage.setItem('user',  JSON.stringify(data.user));
+        window.location.href = '/dashboard.html';
+      } catch {
+        err.textContent = 'Server error. Try again.';
+      }
+    }
+  </script>
+</body>
+</html>
