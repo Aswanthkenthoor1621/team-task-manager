@@ -36,6 +36,16 @@
       </div>
     </div>
 
+    <!-- TASKS PER USER -->
+    <div class="section" id="user-stats-section">
+      <div class="section-header">
+        <h3>👥 Tasks Per User</h3>
+      </div>
+      <div id="user-stats-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;">
+        <p style="color:#888">No data yet.</p>
+      </div>
+    </div>
+
     <!-- PROJECTS -->
     <div class="section">
       <div class="section-header">
@@ -51,7 +61,10 @@
     <div class="section" id="tasks-section" style="display:none">
       <div class="section-header">
         <h3 id="tasks-title">Tasks</h3>
-        <button class="btn btn-primary btn-sm" onclick="openModal('task-modal')">+ New Task</button>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-primary btn-sm" onclick="openModal('task-modal')">+ New Task</button>
+          <button class="btn btn-sm" style="background:#667eea;color:white" id="manage-members-btn" onclick="openModal('members-modal')">👥 Members</button>
+        </div>
       </div>
       <div class="task-columns">
         <div class="task-col">
@@ -126,14 +139,32 @@
     </div>
   </div>
 
+  <!-- MEMBERS MODAL -->
+  <div class="modal-overlay" id="members-modal">
+    <div class="modal">
+      <h3>👥 Manage Members</h3>
+      <div class="form-group">
+        <label>Add Member</label>
+        <select id="add-member-select"></select>
+      </div>
+      <button class="btn btn-primary" style="width:100%;margin-bottom:16px" onclick="addMember()">Add Member</button>
+      <div class="error" id="members-error"></div>
+      <h4 style="margin-bottom:12px">Current Members</h4>
+      <div id="members-list"></div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeModal('members-modal')">Close</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const token = localStorage.getItem('token');
     const user  = JSON.parse(localStorage.getItem('user') || '{}');
     let currentProject = null;
+    let allUsers = [];
 
     if (!token) window.location.href = '/index.html';
 
-    // Setup navbar
     document.getElementById('user-name').textContent = user.name || '';
     const badge = document.getElementById('user-badge');
     badge.textContent = user.role || 'member';
@@ -161,6 +192,23 @@
       document.getElementById('stat-overdue').textContent = s.overdue || 0;
     }
 
+    async function loadUserStats() {
+      const data = await api('/api/userstats');
+      const grid = document.getElementById('user-stats-grid');
+      if (!data.length) {
+        grid.innerHTML = '<p style="color:#888">No tasks assigned yet.</p>';
+        return;
+      }
+      grid.innerHTML = data.map(u => `
+        <div class="stat-card" style="text-align:left;padding:16px">
+          <div style="font-weight:600;margin-bottom:8px">👤 ${u.name}</div>
+          <div style="font-size:13px;color:#888">Total: <b style="color:#667eea">${u.total}</b></div>
+          <div style="font-size:13px;color:#888">Done: <b style="color:#2ed573">${u.done}</b></div>
+          <div style="font-size:13px;color:#888">Overdue: <b style="color:#ff4757">${u.overdue}</b></div>
+        </div>
+      `).join('');
+    }
+
     async function loadProjects() {
       const projects = await api('/api/projects');
       const grid = document.getElementById('projects-grid');
@@ -169,7 +217,7 @@
         return;
       }
       grid.innerHTML = projects.map(p => `
-        <div class="project-card ${currentProject?.id === p.id ? 'active' : ''}" onclick="selectProject(${p.id}, '${p.name}')">
+        <div class="project-card ${currentProject?.id === p.id ? 'active' : ''}" onclick="selectProject(${p.id}, '${p.name}', ${p.created_by})">
           <h4>${p.name}</h4>
           <p>${p.description || 'No description'}</p>
           <div class="project-actions">
@@ -203,12 +251,16 @@
       }
       loadProjects();
       loadStats();
+      loadUserStats();
     }
 
-    async function selectProject(id, name) {
-      currentProject = { id, name };
+    async function selectProject(id, name, created_by) {
+      currentProject = { id, name, created_by };
       document.getElementById('tasks-title').textContent = `📁 ${name} — Tasks`;
       document.getElementById('tasks-section').style.display = 'block';
+      // Show members button only for admin/creator
+      document.getElementById('manage-members-btn').style.display =
+        (user.role === 'admin' || created_by === user.id) ? 'block' : 'none';
       loadTasks();
       loadUsers();
       loadProjects();
@@ -249,10 +301,45 @@
     }
 
     async function loadUsers() {
-      const users  = await api('/api/users');
+      allUsers = await api('/api/users');
       const select = document.getElementById('task-assign');
       select.innerHTML = '<option value="">Unassigned</option>' +
-        users.map(u => `<option value="${u.id}">${u.name} (${u.role})</option>`).join('');
+        allUsers.map(u => `<option value="${u.id}">${u.name} (${u.role})</option>`).join('');
+    }
+
+    async function loadMembers() {
+      const members = await api(`/api/projects/${currentProject.id}/members`);
+      const list = document.getElementById('members-list');
+      list.innerHTML = members.map(m => `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px;border:1px solid #eee;border-radius:8px;margin-bottom:8px">
+          <span>👤 ${m.name} <span class="badge badge-${m.role}">${m.role}</span></span>
+          ${m.user_id !== user.id ? `<button class="btn btn-danger btn-sm" onclick="removeMember(${m.user_id})">Remove</button>` : '<span style="color:#888;font-size:12px">You</span>'}
+        </div>
+      `).join('');
+
+      // Populate add member dropdown - only users not already members
+      const memberIds = members.map(m => m.user_id);
+      const nonMembers = allUsers.filter(u => !memberIds.includes(u.id));
+      const addSelect = document.getElementById('add-member-select');
+      addSelect.innerHTML = nonMembers.length
+        ? nonMembers.map(u => `<option value="${u.id}">${u.name} (${u.role})</option>`).join('')
+        : '<option value="">All users are already members</option>';
+    }
+
+    async function addMember() {
+      const userId = document.getElementById('add-member-select').value;
+      const err = document.getElementById('members-error');
+      if (!userId) return (err.textContent = 'No user selected');
+      const res = await api(`/api/projects/${currentProject.id}/members`, 'POST', { user_id: userId });
+      if (res.error) return (err.textContent = res.error);
+      err.textContent = '';
+      loadMembers();
+    }
+
+    async function removeMember(userId) {
+      if (!confirm('Remove this member?')) return;
+      await api(`/api/projects/${currentProject.id}/members/${userId}`, 'DELETE');
+      loadMembers();
     }
 
     async function createTask() {
@@ -274,12 +361,14 @@
       closeModal('task-modal');
       loadTasks();
       loadStats();
+      loadUserStats();
     }
 
     async function moveTask(id, status) {
       await api(`/api/tasks/${id}`, 'PATCH', { status });
       loadTasks();
       loadStats();
+      loadUserStats();
     }
 
     async function deleteTask(id) {
@@ -287,11 +376,20 @@
       await api(`/api/tasks/${id}`, 'DELETE');
       loadTasks();
       loadStats();
+      loadUserStats();
+    }
+
+    // Open members modal and load members
+    const originalOpenModal = openModal;
+    window.openModal = function(id) {
+      originalOpenModal(id);
+      if (id === 'members-modal') loadMembers();
     }
 
     // Init
     loadStats();
     loadProjects();
+    loadUserStats();
   </script>
 </body>
 </html>

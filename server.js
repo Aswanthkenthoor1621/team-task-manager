@@ -51,6 +51,54 @@ app.post('/api/login', (req, res) => {
 });
 
 // GET PROJECTS
+// GET PROJECT MEMBERS
+app.get('/api/projects/:id/members', auth, (req, res) => {
+  const project_id = parseInt(req.params.id);
+  const members = store.project_members
+    .filter(m => m.project_id === project_id)
+    .map(m => {
+      const u = store.users.find(u => u.id === m.user_id);
+      return { user_id: m.user_id, name: u?.name, role: u?.role };
+    });
+  res.json(members);
+});
+
+// ADD MEMBER TO PROJECT
+app.post('/api/projects/:id/members', auth, (req, res) => {
+  const project_id = parseInt(req.params.id);
+  const user_id = parseInt(req.body.user_id);
+  const already = store.project_members.find(m => m.project_id === project_id && m.user_id === user_id);
+  if (already) return res.status(400).json({ error: 'Already a member' });
+  store.project_members.push({ id: store._id.members++, project_id, user_id, role: 'member' });
+  save();
+  res.json({ success: true });
+});
+
+// REMOVE MEMBER FROM PROJECT
+app.delete('/api/projects/:id/members/:userId', auth, (req, res) => {
+  const project_id = parseInt(req.params.id);
+  const user_id = parseInt(req.params.userId);
+  store.project_members = store.project_members.filter(
+    m => !(m.project_id === project_id && m.user_id === user_id)
+  );
+  save();
+  res.json({ success: true });
+});
+
+// USER STATS
+app.get('/api/userstats', auth, (req, res) => {
+  const today = new Date().toISOString().split('T')[0];
+  const result = store.users.map(u => {
+    const myTasks = store.tasks.filter(t => t.assigned_to === u.id);
+    return {
+      name: u.name,
+      total: myTasks.length,
+      done: myTasks.filter(t => t.status === 'done').length,
+      overdue: myTasks.filter(t => t.due_date && t.due_date < today && t.status !== 'done').length
+    };
+  }).filter(u => u.total > 0);
+  res.json(result);
+});
 app.get('/api/projects', auth, (req, res) => {
   const myProjects = store.projects.filter(p =>
     p.created_by === req.user.id ||
